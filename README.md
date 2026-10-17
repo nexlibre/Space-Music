@@ -45,3 +45,11 @@ La firma de Space Music es independiente de Star Music. Su respaldo cifrado se c
 ## Licencia y créditos
 
 GPL-3.0: se conserva LICENSE y el historial original. Los nombres de paquetes internos se mantienen para conservar compatibilidad del código. Funciones remotas heredadas permanecen en el código compartido, pero sus solicitudes de red siguen bloqueadas y no tienen accesos desde la navegación de Space Music. La conexión del actualizador es independiente.
+
+
+### Audio espacial 3 en 1 (en desarrollo)
+
+Espacial original, Audio 8D y Espacial avanzado paramétrico, con perfiles y
+ajustes independientes. Recomendado con audífonos; no separa instrumentos ni
+utiliza seguimiento de cabeza. [Arquitectura, controles, pruebas y límites](docs/spatial/implementation.md).
+Esta función está en validación; el APK estable enlazado arriba corresponde a 2.3.0.

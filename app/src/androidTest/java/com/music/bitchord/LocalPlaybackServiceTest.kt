@@ -128,10 +128,10 @@ class LocalPlaybackServiceTest {
             }
             val player = future!!.get(20, TimeUnit.SECONDS)
             controller = player
-            for (extension in listOf("mp3", "flac", "m4a")) {
+            for (extension in listOf("mp3", "flac", "m4a", "ogg")) {
                 val audio = File(context.filesDir, "codec-${UUID.randomUUID()}.$extension")
                 files.add(audio)
-                val encoded = instrumentation.context.assets.open("tone.$extension.b64").use { it.readBytes() }
+                val encoded = instrumentation.context.assets.open("spatial-tone.$extension.b64").use { it.readBytes() }
                 audio.writeBytes(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT))
                 val started = CountDownLatch(1)
                 val error = AtomicReference<PlaybackException?>()
@@ -145,7 +145,23 @@ class LocalPlaybackServiceTest {
                 runBlocking { withContext(Dispatchers.Main) { player.playSongs(listOf(song), 0) } }
                 assertTrue("$extension did not start", started.await(20, TimeUnit.SECONDS))
                 assertNull("$extension playback failed", error.get())
+                for (mode in com.music.bitchord.playback.SpatialMode.entries) {
+                    var before = 0L
+                    instrumentation.runOnMainSync {
+                        before = player.currentPosition
+                        com.music.bitchord.data.settings.AppSettings.setSpatialScene(
+                            com.music.bitchord.data.settings.AppSettings.spatialScene.value.copy(mode = mode))
+                        com.music.bitchord.data.settings.AppSettings.setSpatialAudio(true)
+                    }
+                    Thread.sleep(350)
+                    instrumentation.runOnMainSync {
+                        assertNull("$extension/$mode", player.playerError)
+                        assertTrue("$extension/$mode stopped", player.isPlaying)
+                        assertTrue("$extension/$mode restarted", player.currentPosition >= before)
+                    }
+                }
                 instrumentation.runOnMainSync {
+                    com.music.bitchord.data.settings.AppSettings.setSpatialAudio(false)
                     assertTrue("$extension has no decoded duration", player.duration > 0)
                     player.pause()
                     player.removeListener(listener)

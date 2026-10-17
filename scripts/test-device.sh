@@ -18,7 +18,7 @@ timeout 180s adb install -r --no-incremental "$apk"
 timeout 180s adb install -r --no-incremental "$test_apk"
 adb shell svc wifi disable
 adb shell svc data disable
-timeout 180s adb shell am instrument -w -r -e class com.music.bitchord.DevicePlaylistStoreTest,com.music.bitchord.OfflinePlaylistPlaybackTest,com.music.bitchord.ExampleInstrumentedTest,com.music.bitchord.LocalPlaybackServiceTest,com.music.bitchord.LocalLyricsStoreTest org.nexlibre.spacemusic.test/androidx.test.runner.AndroidJUnitRunner | tee device-tests.txt
+timeout 180s adb shell am instrument -w -r -e class com.music.bitchord.DevicePlaylistStoreTest,com.music.bitchord.OfflinePlaylistPlaybackTest,com.music.bitchord.ExampleInstrumentedTest,com.music.bitchord.LocalPlaybackServiceTest,com.music.bitchord.LocalLyricsStoreTest,com.music.bitchord.SpatialPreferencesTest,com.music.bitchord.SpatialRuntimeTest org.nexlibre.spacemusic.test/androidx.test.runner.AndroidJUnitRunner | tee device-tests.txt
 grep -q 'OK (' device-tests.txt
 ! grep -q 'FAILURES\|INSTRUMENTATION_FAILED\|shortMsg=' device-tests.txt
 timeout 15s adb pull /sdcard/Android/data/org.nexlibre.spacemusic/files/playback-integration.png device-playback.png
@@ -44,3 +44,5 @@ timeout 15s adb logcat -d -b crash > device-crash-log.txt
 ! grep -q 'FATAL EXCEPTION' device-crash-log.txt
 
 python3 scripts/test-library-navigation.py
+
+python3 scripts/test-spatial-ui.py

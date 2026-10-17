@@ -5949,7 +5949,11 @@ class PlaybackService : MediaLibraryService() {
             }
         }
         scope.launch {
-            AppSettings.spatialAudio.collect { applySpatialAudioEnabled() }
+            combine(AppSettings.spatialAudio, AppSettings.spatialScene) { _, scene -> scene }.collect { scene ->
+                spatialAudioProcessorA.settings = scene
+                spatialAudioProcessorB.settings = scene
+                applySpatialAudioEnabled()
+            }
         }
         scope.launch {
             AppSettings.loudnessNormalization.collect {
@@ -6022,6 +6026,8 @@ class PlaybackService : MediaLibraryService() {
      * processors are kept in lockstep rather than tracking a role swap.
      */
     private fun applySpatialAudioEnabled() {
+        spatialAudioProcessorA.settings = AppSettings.spatialScene.value
+        spatialAudioProcessorB.settings = AppSettings.spatialScene.value
         val enabled = AppSettings.spatialAudio.value && !activeTrackIsDolbyAtmos
         spatialAudioProcessorA.enabled = enabled
         spatialAudioProcessorB.enabled = enabled

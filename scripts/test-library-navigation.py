@@ -53,7 +53,7 @@ def tap(label):
 adb('shell', 'am', 'force-stop', 'org.nexlibre.spacemusic')
 adb('shell', 'am', 'start', '-W', '-n', 'org.nexlibre.spacemusic/com.music.bitchord.MainActivity')
 for node in snapshot().iter('node'):
-    if node.get('text') == 'What is new in Space Music 2.3.0':
+    if node.get('text', '').startswith('What is new in Space Music '):
         for button in snapshot().iter('node'):
             if button.get('text') == 'Back':
                 l, t, r, b = bounds(button)
@@ -187,7 +187,7 @@ for _ in range(35):
 else:
     raise AssertionError('Licenses and open source is not reachable in Settings')
 footer = '\n'.join(n.get('text', '') for n in root.iter('node'))
-assert 'Space Music 2.3.0' in footer, footer
+assert 'Space Music 2.4.0' in footer, footer
 assert 'Local music player' in footer, footer
 assert 'Discord' not in footer and 'Website' not in footer, footer
 Path('device-settings-identity.png').write_bytes(adb('exec-out', 'screencap', '-p'))

@@ -27,6 +27,10 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
     @Volatile
     var enabled: Boolean = false
 
+    @Volatile var settings: SpatialSettings = SpatialSettings()
+        set(value) { field = value.copy(eightD = value.eightD.sanitized(), advanced = value.advanced.sanitized()) }
+    private val scene = SpatialSceneEngine()
+
     /** How much wider the stereo image gets. 1.0 = untouched. */
     private val widthGain = 2.5f
 
@@ -52,6 +56,7 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
      * Configures the Float32 DSP engine for [sampleRate] and [channelCount].
      */
     fun configure(sampleRate: Int, channelCount: Int) {
+        scene.configure(sampleRate)
         this.sampleRate = sampleRate
         this.channelCount = channelCount
         if (channelCount != 2 || sampleRate <= 0) {
@@ -77,12 +82,15 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
      * Preserves dynamic headroom without clamping to [-1.0f, +1.0f].
      */
     fun process(block: AudioBlock) {
-        if (!enabled || block.frameCount == 0) return
+        if ((!enabled && !scene.active) || block.frameCount == 0) return
         if (block.channelCount != 2) return // Spatial widening only applies to stereo
 
         val delaySize = delayLeft.size
         if (delaySize == 0) return
 
+        val snapshot = settings
+        val isEnabled = enabled
+        if (isEnabled && !scene.active) clearOriginalHistory()
         val totalSamples = block.frameCount * 2
         var idx = 0
         var dIdx = delayIndex
@@ -110,8 +118,9 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
             dIdx = (dIdx + 1) % delaySize
 
             // Headroom is preserved: no clamping to [-1.0f, +1.0f]
-            block.samples[idx] = widenedLeft * outputGain
-            block.samples[idx + 1] = widenedRight * outputGain
+            scene.process(left, right, widenedLeft * outputGain, widenedRight * outputGain, isEnabled, snapshot)
+            block.samples[idx] = scene.left
+            block.samples[idx + 1] = scene.right
             idx += 2
         }
 
@@ -148,7 +157,16 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
         return inputAudioFormat
     }
 
+    private fun clearOriginalHistory() {
+        delayLeft.fill(0f)
+        delayRight.fill(0f)
+        delayIndex = 0
+        lowpassLeft = 0f
+        lowpassRight = 0f
+    }
+
     override fun onFlush() {
+        scene.reset()
         delayLeft.fill(0f)
         delayRight.fill(0f)
         delayIndex = 0
@@ -157,6 +175,7 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
     }
 
     override fun onReset() {
+        scene.release()
         delayLeft = FloatArray(0)
         delayRight = FloatArray(0)
         delayIndex = 0
@@ -171,7 +190,7 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
         if (frameCount == 0) return
         val outputBuffer = replaceOutputBuffer(frameCount * BYTES_PER_FRAME)
 
-        if (!enabled) {
+        if (!enabled && !scene.active) {
             outputBuffer.put(inputBuffer)
             outputBuffer.flip()
             return
@@ -187,11 +206,14 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
             return
         }
 
+        if (enabled && !scene.active) clearOriginalHistory()
         var dIdx = delayIndex
         var lpL = lowpassLeft
         var lpR = lowpassRight
         val invScale = 1.0f / 32768.0f
 
+        val snapshot = settings
+        val isEnabled = enabled
         repeat(frameCount) {
             val left = inputBuffer.short.toFloat() * invScale
             val right = inputBuffer.short.toFloat() * invScale
@@ -212,8 +234,9 @@ class SpatialAudioProcessor : BaseAudioProcessor() {
             delayRight[dIdx] = right
             dIdx = (dIdx + 1) % delaySize
 
-            outputBuffer.putShort(PcmBoundary.clamp16FromFloat(widenedLeft * outputGain))
-            outputBuffer.putShort(PcmBoundary.clamp16FromFloat(widenedRight * outputGain))
+            scene.process(left, right, widenedLeft * outputGain, widenedRight * outputGain, isEnabled, snapshot)
+            outputBuffer.putShort(PcmBoundary.clamp16FromFloat(scene.left))
+            outputBuffer.putShort(PcmBoundary.clamp16FromFloat(scene.right))
         }
         delayIndex = dIdx
         lowpassLeft = lpL
