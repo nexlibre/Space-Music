@@ -1,0 +1,104 @@
+name: Verify Space Music Spatial parallel edition
+on:
+  pull_request:
+    branches: [space-spatial-3-in-1]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: space-spatial-verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android build tools
+        run: |
+          sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'cmake;3.22.1' 'ndk;27.0.12077973'
+          if [ ! -d "$ANDROID_HOME/platforms/android-37" ]; then ln -s android-37.0 "$ANDROID_HOME/platforms/android-37"; fi
+          echo "ORG_GRADLE_PROJECT_spaceNdkVersion=27.0.12077973" >> "$GITHUB_ENV"
+      - name: Run regression tests and build the parallel edition
+        run: |
+          chmod +x gradlew
+          ./gradlew '-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true' --max-workers=2 :shared:jvmTest :app:testProdDebugUnitTest :app:lintProdDebug :app:assembleProdRelease :app:assembleProdReleaseAndroidTest -PspaceSpatialEdition=true -PstarTestBuildType=release --build-cache --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: space-spatial-parallel-verify
+          path: |
+            app/build/outputs/apk/
+            app/build/reports/
+            shared/build/reports/tests/
+          if-no-files-found: error
+  device:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [31, 33, 34, 35, 36]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: space-spatial-parallel-verify
+          path: built
+      - name: Sign test copies for emulator installation
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          keytool -genkeypair -keystore "$keydir/ci.p12" -storetype PKCS12 -alias ci-test -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Space Spatial CI only' -storepass ci-test-only -keypass ci-test-only
+          apk=$(find built -path '*/prod/release/*' -name '*universal*unsigned.apk' | head -1)
+          runner=$(find built -path '*/androidTest/prod/release/*' -name '*.apk' | head -1)
+          test -n "$apk" && test -n "$runner"
+          signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$signer" sign --ks "$keydir/ci.p12" --ks-key-alias ci-test --ks-pass pass:ci-test-only --key-pass pass:ci-test-only --out dist/Space-Music-Spatial-CI.apk "$apk"
+          "$signer" sign --ks "$keydir/ci.p12" --ks-key-alias ci-test --ks-pass pass:ci-test-only --key-pass pass:ci-test-only --out dist/test-runner.apk "$runner"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify installation, playback and spatial controls
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          emulator-boot-timeout: 300
+          emulator-options: -no-window -gpu swangle -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none -feature -Vulkan
+          disable-animations: true
+          script: TEST_APP_APK=dist/Space-Music-Spatial-CI.apk TEST_INSTRUMENTATION_APK=dist/test-runner.apk SPACE_APP_ID=org.nexlibre.spacemusic.spatial bash scripts/test-device.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: space-spatial-verify-device-${{ matrix.api }}-${{ github.run_attempt }}
+          path: |
+            device-tests.txt
+            device-startup-log.txt
+            device-crash-log.txt
+            device-full-log.txt
+            device-*.xml
+            device-*.png

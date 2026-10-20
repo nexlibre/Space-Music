@@ -69,6 +69,14 @@ val listenTogetherServer: String = (
  */
 val betaSuffix = ""
 
+// Parallel identity for the spatial edition; keeps the existing app untouched.
+val spaceSpatialEdition = providers.gradleProperty("spaceSpatialEdition").orNull == "true"
+
+val spatialSigning = Properties().apply {
+    val file = rootProject.file("space-spatial-keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.music.bitchord"
     ndkVersion = providers.gradleProperty("spaceNdkVersion").getOrElse("27.0.12077973")
@@ -78,13 +86,15 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "org.nexlibre.spacemusic"
+        applicationId = if (spaceSpatialEdition) "org.nexlibre.spacemusic.spatial" else "org.nexlibre.spacemusic"
         // 26 keeps reach wide; real-time blur (RenderEffect) kicks in on API 31+,
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "2.4.0"
+        versionCode = if (spaceSpatialEdition) 1 else 8
+        versionName = if (spaceSpatialEdition) "1.0.0" else "2.4.0"
+        resValue("string", "app_name", if (spaceSpatialEdition) "Space Music Spatial" else "Space Music")
+        buildConfigField("Boolean", "SPATIAL_EDITION", spaceSpatialEdition.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -147,6 +157,15 @@ android {
                 keyPassword = signing.getProperty("keyPassword")
             }
         }
+        val spatialStore = spatialSigning.getProperty("storeFile")?.let { rootProject.file(it) }
+        if (spatialStore != null && spatialStore.exists()) {
+            create("spaceSpatialRelease") {
+                storeFile = spatialStore
+                storePassword = spatialSigning.getProperty("storePassword")
+                keyAlias = spatialSigning.getProperty("keyAlias")
+                keyPassword = spatialSigning.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -177,7 +196,7 @@ android {
             )
             // Null without a keystore to sign with: the build then produces
             // app-release-unsigned.apk instead of failing outright.
-            signingConfig = signingConfigs.findByName("release")
+            signingConfig = signingConfigs.findByName(if (spaceSpatialEdition) "spaceSpatialRelease" else "release")
         }
         /*
          * The release build, installable next to the dev and prod apps: same R8,

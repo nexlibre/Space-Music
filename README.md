@@ -47,7 +47,7 @@ La firma de Space Music es independiente de Star Music. Su respaldo cifrado se c
 GPL-3.0: se conserva LICENSE y el historial original. Los nombres de paquetes internos se mantienen para conservar compatibilidad del código. Funciones remotas heredadas permanecen en el código compartido, pero sus solicitudes de red siguen bloqueadas y no tienen accesos desde la navegación de Space Music. La conexión del actualizador es independiente.
 
 
-### Audio espacial 3 en 1 (en desarrollo)
+### Audio espacial 3 en 1
 
 Espacial original, Audio 8D y Espacial avanzado paramétrico, con perfiles y
 ajustes independientes. Recomendado con audífonos; no separa instrumentos ni
@@ -60,3 +60,32 @@ Android 12, 13, 14, 15 y 16. Aún no está publicada: falta restaurar la firma o
 y validar el APK oficial como actualización. Las pruebas físicas y auditivas siguen pendientes.
 [Informe y capturas](docs/spatial/verification-2.4.0.md) ·
 [Notas preparadas de la candidata](docs/spatial/release-notes-2.4.0.md).
+
+## Space Music Spatial 1.0.0 — edición paralela de prueba
+
+**[Descargar APK Spatial 1.0.0](https://github.com/nexlibre/Space-Music/releases/download/spatial-v1.0.0/Space-Music-Spatial-1.0.0.apk)** ·
+[Release, firma y SHA-256](https://github.com/nexlibre/Space-Music/releases/tag/spatial-v1.0.0)
+
+Este canal publica el APK cuando pasan las comprobaciones automatizadas de la ejecución.
+Es una instalación independiente: paquete `org.nexlibre.spacemusic.spatial`, versión
+1.0.0 y firma persistente nueva. No reemplaza ni actualiza Space Music 2.3.0;
+pueden coexistir. No importa sus preferencias ni su base de datos de listas.
+Descarga el APK, permite la instalación desde el navegador cuando Android lo solicite
+y abre **Space Music Spatial**. No hace falta desinstalar la aplicación anterior.
+
+Ofrece Espacial original, Audio 8D y Espacial avanzado paramétrico, con perfiles
+y controles guardados por modo. Original conserva el algoritmo anterior.
+Audio 8D simula una órbita de 40 a 6 segundos por vuelta. Avanzado utiliza
+retardos interaurales, diferencias de nivel y filtrado espectral; no usa HRTF
+medidas ni separa voces o instrumentos. Recomendado con audífonos. Solo
+espacializa señales estéreo; mono y multicanal conservan reproducción sin ese DSP.
+
+La publicación exige pruebas JVM, lint, compilación optimizada, matriz de
+emuladores Android 12–16, verificación de firma/alineación/paquete y una prueba
+adicional de instalación y reproducción del APK con la firma definitiva en Android 13.
+La documentación técnica y las mediciones anteriores están en
+[arquitectura](docs/spatial/implementation.md) e
+[informe de la candidata](docs/spatial/verification-2.4.0.md); sus referencias a
+la firma original de 2.4.0 corresponden al canal original, no a esta edición paralela.
+Quedan pendientes dispositivos reales, escucha con audífonos, cambios Bluetooth
+y sesiones largas de batería/temperatura. El diagrama espacial es estático.

@@ -1,0 +1,278 @@
+name: Space Music Spatial parallel edition
+on:
+  push:
+    branches: [space-spatial-parallel-app]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: space-spatial-parallel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signing-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - name: Validate persistent signing credentials before building
+        env:
+          KEY: ${{ secrets.SPACE_SPATIAL_KEYSTORE_B64 }}
+          PASSWORD: ${{ secrets.SPACE_SPATIAL_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEY" ]; then
+            echo "::error::Missing repository secret SPACE_SPATIAL_KEYSTORE_B64"
+            exit 1
+          fi
+          if [ -z "$PASSWORD" ]; then
+            echo "::error::Missing repository secret SPACE_SPATIAL_KEYSTORE_PASSWORD"
+            exit 1
+          fi
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          python3 scripts/prepare-spatial-signing.py "$keydir"
+          if ! keytool -list -keystore "$keydir/spatial.p12" -storetype PKCS12 \
+            -alias space-spatial -storepass:file "$keydir/password.txt" > /dev/null; then
+            echo "::error::Keystore cannot be opened with the supplied password or expected alias."
+            exit 1
+          fi
+          echo "Persistent signing credentials validated."
+
+  build:
+    needs: signing-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android build tools
+        run: |
+          sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'cmake;3.22.1' 'ndk;27.0.12077973'
+          if [ ! -d "$ANDROID_HOME/platforms/android-37" ]; then ln -s android-37.0 "$ANDROID_HOME/platforms/android-37"; fi
+          echo "ORG_GRADLE_PROJECT_spaceNdkVersion=27.0.12077973" >> "$GITHUB_ENV"
+      - name: Run JVM regression tests and build isolated edition
+        run: |
+          chmod +x gradlew
+          ./gradlew '-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true' --max-workers=2 \
+            :shared:jvmTest :app:testProdDebugUnitTest :app:lintProdDebug \
+            :app:assembleProdRelease :app:assembleProdReleaseAndroidTest \
+            -PspaceSpatialEdition=true -PstarTestBuildType=release --build-cache --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: space-spatial-parallel-build
+          path: |
+            app/build/outputs/apk/
+            app/build/reports/
+            shared/build/reports/tests/
+          if-no-files-found: error
+
+  device:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [31, 33, 34, 35, 36]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: space-spatial-parallel-build
+          path: built
+      - name: Sign test copies for emulator installation
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          keytool -genkeypair -keystore "$keydir/ci.p12" -storetype PKCS12 -alias ci-test \
+            -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Space Spatial CI only' \
+            -storepass ci-test-only -keypass ci-test-only
+          apk=$(find built -path '*/prod/release/*' -name '*universal*unsigned.apk' | head -1)
+          runner=$(find built -path '*/androidTest/prod/release/*' -name '*.apk' | head -1)
+          test -n "$apk" && test -n "$runner"
+          signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          "$signer" sign --ks "$keydir/ci.p12" --ks-key-alias ci-test \
+            --ks-pass pass:ci-test-only --key-pass pass:ci-test-only \
+            --out dist/Space-Music-Spatial-CI.apk "$apk"
+          "$signer" sign --ks "$keydir/ci.p12" --ks-key-alias ci-test \
+            --ks-pass pass:ci-test-only --key-pass pass:ci-test-only \
+            --out dist/test-runner.apk "$runner"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify parallel package installation, playback and spatial controls
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          emulator-boot-timeout: 300
+          emulator-options: -no-window -gpu swangle -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none -feature -Vulkan
+          disable-animations: true
+          script: TEST_APP_APK=dist/Space-Music-Spatial-CI.apk TEST_INSTRUMENTATION_APK=dist/test-runner.apk SPACE_APP_ID=org.nexlibre.spacemusic.spatial bash scripts/test-device.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: space-spatial-parallel-device-${{ matrix.api }}-${{ github.run_attempt }}
+          path: |
+            device-tests.txt
+            device-startup-log.txt
+            device-crash-log.txt
+            device-full-log.txt
+            device-*.xml
+            device-*.png
+
+  publish:
+    needs: [build, device]
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Install signing tools
+        run: sdkmanager 'build-tools;36.0.0'
+      - uses: actions/download-artifact@v4
+        with:
+          name: space-spatial-parallel-build
+          path: built
+      - name: Check for persistent release signing credentials
+        id: signing
+        env:
+          KEY: ${{ secrets.SPACE_SPATIAL_KEYSTORE_B64 }}
+          PASSWORD: ${{ secrets.SPACE_SPATIAL_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEY" ] && [ -n "$PASSWORD" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Release signing credentials are missing. Set SPACE_SPATIAL_KEYSTORE_B64 and SPACE_SPATIAL_KEYSTORE_PASSWORD before publishing."
+            exit 1
+          fi
+      - name: Sign APK with the persistent parallel-edition key
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          KEY: ${{ secrets.SPACE_SPATIAL_KEYSTORE_B64 }}
+          PASSWORD: ${{ secrets.SPACE_SPATIAL_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          python3 scripts/prepare-spatial-signing.py "$keydir"
+          keytool -list -keystore "$keydir/spatial.p12" -storetype PKCS12 \
+            -alias space-spatial -storepass:file "$keydir/password.txt"
+          unsigned=$(find built -path '*/prod/release/*' -name '*universal*unsigned.apk' | head -1)
+          test -n "$unsigned"
+          mkdir -p dist
+          signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          align="$ANDROID_HOME/build-tools/36.0.0/zipalign"
+          "$align" -f -P 16 4 "$unsigned" "$keydir/aligned.apk"
+          "$signer" sign --ks "$keydir/spatial.p12" --ks-key-alias space-spatial \
+            --ks-pass "file:$keydir/password.txt" \
+            --key-pass "file:$keydir/password.txt" \
+            --out dist/Space-Music-Spatial-1.0.0.apk "$keydir/aligned.apk"
+          runner=$(find built -path '*/androidTest/prod/release/*' -name '*.apk' | head -1)
+          test -n "$runner"
+          "$signer" sign --ks "$keydir/spatial.p12" --ks-key-alias space-spatial \
+            --ks-pass "file:$keydir/password.txt" --key-pass "file:$keydir/password.txt" \
+            --out dist/spatial-test-runner.apk "$runner"
+          "$signer" verify --verbose --print-certs dist/Space-Music-Spatial-1.0.0.apk \
+            | tee dist/Space-Music-Spatial-1.0.0.apk.signature.txt
+          "$align" -c -P 16 4 dist/Space-Music-Spatial-1.0.0.apk
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging dist/Space-Music-Spatial-1.0.0.apk \
+            > dist/package-verification.txt
+          grep -q "package: name='org.nexlibre.spacemusic.spatial' versionCode='1' versionName='1.0.0'" dist/package-verification.txt
+          (cd dist && sha256sum Space-Music-Spatial-1.0.0.apk > SHA256SUMS.txt)
+      - name: Enable KVM for final signed APK verification
+        if: steps.signing.outputs.ready == 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install and exercise final signed APK on Android 13
+        if: steps.signing.outputs.ready == 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          emulator-boot-timeout: 300
+          emulator-options: -no-window -gpu swangle -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none -feature -Vulkan
+          disable-animations: true
+          script: TEST_APP_APK=dist/Space-Music-Spatial-1.0.0.apk TEST_INSTRUMENTATION_APK=dist/spatial-test-runner.apk SPACE_APP_ID=org.nexlibre.spacemusic.spatial bash scripts/test-device.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: space-spatial-final-signed-device-${{ github.run_attempt }}
+          path: |
+            device-tests.txt
+            device-startup-log.txt
+            device-crash-log.txt
+            device-full-log.txt
+            device-*.xml
+            device-*.png
+      - name: Create non-latest spatial release
+        if: steps.signing.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+          cat > /tmp/notes.md <<'NOTES'
+          # Space Music Spatial 1.0.0 — edición de prueba
+
+          Parallel first-install edition with the three spatial audio modes. It uses a new application ID and a new signing key, so it can be installed alongside the original Space Music. It does not import the original app's settings or library database. Use headphones for the best spatial effect.
+
+          Automated verification: Android 12, 13, 14, 15 and 16 emulator matrix; JVM regression tests; optimized release build; audio-mode controls and playback integration.
+          Final release-signed APK: installation, startup, playback and spatial-control integration are additionally checked on Android 13 before upload.
+          
+          Modes: Original preserves the previous algorithm; Audio 8D simulates movement (40–6 seconds per turn); Advanced uses a parametric binaural approximation with interaural delay, level and spectral filtering. It does not use measured HRTF, head tracking or instrument separation. Mono/multichannel playback bypasses stereo spatialization; the optional diagram is static.
+          
+          Physical-device, headphone listening, Bluetooth route changes and prolonged battery/temperature checks remain pending. This is a prerelease, not a replacement update for the original signed app.
+          NOTES
+          gh release create spatial-v1.0.0 dist/Space-Music-Spatial-1.0.0.apk \
+            dist/SHA256SUMS.txt dist/Space-Music-Spatial-1.0.0.apk.signature.txt \
+            dist/package-verification.txt --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title 'Space Music Spatial 1.0.0' --notes-file /tmp/notes.md --latest=false --prerelease
+          gh release view spatial-v1.0.0 --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -Fx Space-Music-Spatial-1.0.0.apk

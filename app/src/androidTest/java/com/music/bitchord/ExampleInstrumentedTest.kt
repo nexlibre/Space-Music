@@ -50,8 +50,8 @@ class ExampleInstrumentedTest {
 
     @Test
     fun useAppContext() {
-        // Context of the app under test.
+        // The manifest application ID follows the selected build variant.
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("org.nexlibre.spacemusic", appContext.packageName)
+        assertEquals(BuildConfig.APPLICATION_ID, appContext.packageName)
     }
 }

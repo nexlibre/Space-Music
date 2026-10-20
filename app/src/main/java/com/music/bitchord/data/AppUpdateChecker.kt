@@ -46,6 +46,11 @@ object AppUpdateChecker {
     internal const val LATEST_RELEASE_URL =
         "https://api.github.com/repos/nexlibre/Space-Music/releases/latest"
 
+    // Spatial releases share the repository but use a separate version channel;
+    // the original app's /latest feed therefore remains untouched.
+    internal const val SPATIAL_RELEASES_URL =
+        "https://api.github.com/repos/nexlibre/Space-Music/releases?per_page=100"
+
     // Music's shared client remains disabled. Only release metadata and APKs
     // use this isolated client, including each HTTPS redirect hop.
     private val client = okhttp3.OkHttpClient.Builder()
@@ -81,23 +86,40 @@ object AppUpdateChecker {
 
     suspend fun check() = withContext(Dispatchers.IO) {
         runCatching {
-            val request = Request.Builder().url(LATEST_RELEASE_URL).build()
+            val spatialEdition = BuildConfig.SPATIAL_EDITION
+            val feed = if (spatialEdition) SPATIAL_RELEASES_URL else LATEST_RELEASE_URL
+            val request = Request.Builder().url(feed).build()
             val body = client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) null else response.body?.string()
             } ?: return@runCatching
-            val release = json.parseToJsonElement(body) as? JsonObject ?: return@runCatching
+            val release = if (spatialEdition) {
+                selectSpatialRelease(body)
+            } else {
+                json.parseToJsonElement(body) as? JsonObject
+            } ?: return@runCatching
             if (release["draft"]?.jsonPrimitive?.booleanOrNull == true ||
                 release["prerelease"]?.jsonPrimitive?.booleanOrNull == true) return@runCatching
             val tag = release["tag_name"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
             val url = release["html_url"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
             val apkUrl = apkAssetUrl(release)
             val notes = release["body"]?.jsonPrimitive?.contentOrNull
-            val latest = tag.removePrefix("v")
+            val latest = tag.removePrefix(if (spatialEdition) "spatial-v" else "v")
             if (isNewer(latest, BuildConfig.VERSION_NAME)) {
                 _available.value = UpdateInfo(latest, url, apkUrl, notes)
             }
         }
     }
+
+    /** Selects only stable releases for the parallel app channel. */
+    internal fun selectSpatialRelease(payload: String): JsonObject? = runCatching {
+        val releases = json.parseToJsonElement(payload).jsonArray
+        releases.mapNotNull { it as? JsonObject }.firstOrNull { release ->
+            val tag = release["tag_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            tag.startsWith("spatial-v") &&
+                release["draft"]?.jsonPrimitive?.booleanOrNull != true &&
+                release["prerelease"]?.jsonPrimitive?.booleanOrNull != true
+        }
+    }.getOrNull()
 
     /**
      * Wipes any APK left over from a previous run. Called once at cold start

@@ -1,9 +1,12 @@
 """Check actual rendered bottom tabs, content routing and saved selection."""
+import os
 import re
 import subprocess
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+package = os.environ.get('SPACE_APP_ID', 'org.nexlibre.spacemusic')
 
 
 def adb(*args):
@@ -18,8 +21,18 @@ def snapshot():
 
 
 def tab(label, selected=None):
-    for _ in range(10):
+    for _ in range(25):
         root = snapshot()
+        # Cold launches can still be showing the once-per-version release notes.
+        # Close that native dialog before looking for the library tabs.
+        if not any(n.get('content-desc') == label for n in root.iter('node')):
+            if any(n.get('text', '').startswith('What is new in Space Music ') for n in root.iter('node')):
+                back = next((n for n in root.iter('node') if n.get('text') == 'Back'), None)
+                if back is not None:
+                    l, t, r, b = bounds(back)
+                    adb('shell', 'input', 'tap', str((l+r)//2), str((t+b)//2))
+                    time.sleep(.5)
+                    continue
         parents = {child: parent for parent in root.iter() for child in parent}
         nodes = []
         for child in root.iter('node'):
@@ -51,7 +64,7 @@ def tap(label):
 
 # Tests run after local playback regressions, with permissions already granted.
 adb('shell', 'am', 'force-stop', 'org.nexlibre.spacemusic')
-adb('shell', 'am', 'start', '-W', '-n', 'org.nexlibre.spacemusic/com.music.bitchord.MainActivity')
+adb('shell', 'am', 'start', '-W', '-n', package + '/com.music.bitchord.MainActivity')
 for node in snapshot().iter('node'):
     if node.get('text', '').startswith('What is new in Space Music '):
         for button in snapshot().iter('node'):
@@ -83,7 +96,6 @@ print('PASS: bottom order, single tabs, routing, selected accessibility state an
 # Seed isolated emulator fixtures through root, for debug and optimized builds.
 # Store tests above use separate filenames; these fixtures exercise the rendered UI.
 import json
-package = 'org.nexlibre.spacemusic'
 base = f'/data/user/0/{package}/files'
 fixture = [dict(id=k, name='Sort ' + k, songs=[
     dict(id='z', title='ZZZ sort fixture', artist='AAA artist', uri='file:///z.mp3'),
@@ -187,7 +199,8 @@ for _ in range(35):
 else:
     raise AssertionError('Licenses and open source is not reachable in Settings')
 footer = '\n'.join(n.get('text', '') for n in root.iter('node'))
-assert 'Space Music 2.4.0' in footer, footer
+expected_version = '1.0.0' if package.endswith('.spatial') else '2.4.0'
+assert f'Space Music {expected_version}' in footer, footer
 assert 'Local music player' in footer, footer
 assert 'Discord' not in footer and 'Website' not in footer, footer
 Path('device-settings-identity.png').write_bytes(adb('exec-out', 'screencap', '-p'))

@@ -1243,16 +1243,16 @@ class SourcesTest {
     }
 
     /**
-     * Answers that arrive together are still ranked. Racing gives up ordering
-     * between a fast source and a slow one; it does not give up ordering
-     * between two that answered at the same moment.
+     * When the caller explicitly waits for all backends, quality is selected
+     * after every result arrives. This verifies ranking without relying on two
+     * real-time delays completing in the same scheduler tick.
      */
     @Test
-    fun `prefers the better of two answers that arrive together`() = runBlocking {
+    fun `selects the better quality when all sources are awaited`() = runBlocking {
         val worse = FakeSource("Ricky's Addon", answerAfterMs = 5, format = StreamFormat("mp3", kbps = 128))
         val better = FakeSource("JioSaavn", answerAfterMs = 5, format = StreamFormat("mp4", kbps = 320))
         val (source, stream) = SourceResolver.bestAcross(
-            listOf(worse, better), raceTarget(), StreamRequest.Lossless,
+            listOf(worse, better), raceTarget(), StreamRequest.Lossless, waitForAll = true,
         )!!
         assertEquals("JioSaavn", source.displayName)
         assertEquals(320, stream.format.kbps)

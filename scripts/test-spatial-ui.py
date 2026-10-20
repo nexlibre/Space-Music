@@ -1,10 +1,11 @@
 """Capture actual contextual spatial controls in light/dark themes and large font."""
 import re
+import os
 import subprocess
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-PACKAGE = 'org.nexlibre.spacemusic'
+PACKAGE = os.environ.get('SPACE_APP_ID', 'org.nexlibre.spacemusic')
 
 def adb(*args):
     return subprocess.check_output(['adb', *args], timeout=40)
