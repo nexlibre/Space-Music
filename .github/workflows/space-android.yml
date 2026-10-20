@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: space-android-${{ github.ref }}
   cancel-in-progress: true
@@ -16,6 +17,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           java-version: '21'
@@ -110,7 +113,7 @@ jobs:
             device-startup-log.txt
             device-crash-log.txt
             device-*.png
-            device-navigation.xml
+            device-*.xml
 
   optimized-device-test:
     needs: build
@@ -119,7 +122,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api: [31, 33, 35]
+        api: [31, 33, 34, 35, 36]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -175,4 +178,5 @@ jobs:
             device-startup-log.txt
             device-crash-log.txt
             device-full-log.txt
+            device-*.xml
             device-*.png

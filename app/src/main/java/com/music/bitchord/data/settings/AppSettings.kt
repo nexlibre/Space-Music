@@ -299,6 +299,7 @@ object AppSettings {
      * us a stereo stream, so there's no Atmos-style source to render.
      */
     val spatialAudio = MutableStateFlow(false)
+    val spatialScene = MutableStateFlow(com.music.bitchord.playback.SpatialSettings())
 
     /**
      * The app's own equaliser, master switch.
@@ -803,6 +804,7 @@ object AppSettings {
         loudnessOffOnSpeaker.value = prefs.getBoolean(KEY_LOUDNESS_OFF_ON_SPEAKER, true)
         dolbyAtmos.value = prefs.getBoolean(KEY_DOLBY_ATMOS, true)
         spatialAudio.value = prefs.getBoolean(KEY_SPATIAL_AUDIO, false)
+        spatialScene.value = readSpatialScene()
         equalizerEnabled.value = prefs.getBoolean(KEY_EQ_ENABLED, false)
         equalizerMode.value = runCatching {
             EqualizerMode.valueOf(prefs.getString(KEY_EQ_MODE, null) ?: EqualizerMode.DYNAMIC.name)
@@ -1093,6 +1095,37 @@ object AppSettings {
     fun setDolbyAtmos(value: Boolean) {
         dolbyAtmos.value = value
         prefs.edit().putBoolean(KEY_DOLBY_ATMOS, value).apply()
+    }
+
+    private fun readSpatialScene(): com.music.bitchord.playback.SpatialSettings {
+        val defaults = com.music.bitchord.playback.SpatialSettings()
+        return runCatching {
+            val json = org.json.JSONObject(prefs.getString("spatial_scene_v1", "{}") ?: "{}")
+            fun parameters(key: String, default: com.music.bitchord.playback.SpatialParameters): com.music.bitchord.playback.SpatialParameters {
+                val j = json.optJSONObject(key) ?: return default
+                return default.copy(intensity = j.optDouble("intensity", default.intensity.toDouble()).toFloat(),
+                    speed = j.optDouble("speed", default.speed.toDouble()).toFloat(),
+                    width = j.optDouble("width", default.width.toDouble()).toFloat(),
+                    depth = j.optDouble("depth", default.depth.toDouble()).toFloat(),
+                    distance = j.optDouble("distance", default.distance.toDouble()).toFloat(),
+                    reverb = j.optInt("reverb", default.reverb), profile = j.optInt("profile", default.profile)).sanitized()
+            }
+            defaults.copy(mode = runCatching { com.music.bitchord.playback.SpatialMode.valueOf(json.optString("mode", "ORIGINAL")) }
+                .getOrDefault(com.music.bitchord.playback.SpatialMode.ORIGINAL),
+                eightD = parameters("eightD", defaults.eightD), advanced = parameters("advanced", defaults.advanced),
+                visualization = json.optBoolean("visualization", false))
+        }.getOrDefault(defaults)
+    }
+
+    fun setSpatialScene(value: com.music.bitchord.playback.SpatialSettings) {
+        val safe = value.copy(eightD = value.eightD.sanitized(), advanced = value.advanced.sanitized())
+        fun parameters(v: com.music.bitchord.playback.SpatialParameters) = org.json.JSONObject()
+            .put("intensity", v.intensity).put("speed", v.speed).put("width", v.width)
+            .put("depth", v.depth).put("distance", v.distance).put("reverb", v.reverb).put("profile", v.profile)
+        prefs.edit().putString("spatial_scene_v1", org.json.JSONObject().put("mode", safe.mode.name)
+            .put("eightD", parameters(safe.eightD)).put("advanced", parameters(safe.advanced))
+            .put("visualization", safe.visualization).toString()).apply()
+        spatialScene.value = safe
     }
 
     fun setSpatialAudio(value: Boolean) {

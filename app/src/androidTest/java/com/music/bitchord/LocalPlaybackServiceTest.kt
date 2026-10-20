@@ -120,6 +120,8 @@ class LocalPlaybackServiceTest {
         val scenario = ActivityScenario.launch(MainActivity::class.java)
         var controller: MediaController? = null
         val files = mutableListOf<File>()
+        val savedScene = com.music.bitchord.data.settings.AppSettings.spatialScene.value
+        val savedSpatial = com.music.bitchord.data.settings.AppSettings.spatialAudio.value
         try {
             var future: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
             instrumentation.runOnMainSync {
@@ -128,15 +130,24 @@ class LocalPlaybackServiceTest {
             }
             val player = future!!.get(20, TimeUnit.SECONDS)
             controller = player
-            for (extension in listOf("mp3", "flac", "m4a")) {
+            for (extension in listOf("mp3", "flac", "m4a", "ogg")) {
                 val audio = File(context.filesDir, "codec-${UUID.randomUUID()}.$extension")
                 files.add(audio)
-                val encoded = instrumentation.context.assets.open("tone.$extension.b64").use { it.readBytes() }
+                val encoded = instrumentation.context.assets.open("spatial-tone.$extension.b64").use { it.readBytes() }
                 audio.writeBytes(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT))
                 val started = CountDownLatch(1)
                 val error = AtomicReference<PlaybackException?>()
+                val expectedId = "local-codec-$extension"
+                val discontinuities = mutableListOf<Int>()
+                var checkingTransition = false
                 val listener = object : Player.Listener {
-                    override fun onIsPlayingChanged(isPlaying: Boolean) { if (isPlaying) started.countDown() }
+                    override fun onEvents(player: Player, events: Player.Events) {
+                        if (player.currentMediaItem?.mediaId == expectedId && player.isPlaying &&
+                            player.playbackState == Player.STATE_READY) started.countDown()
+                    }
+                    override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                        if (checkingTransition) discontinuities.add(reason)
+                    }
                     override fun onPlayerError(e: PlaybackException) { error.set(e); started.countDown() }
                 }
                 instrumentation.runOnMainSync { player.stop(); player.addListener(listener) }
@@ -145,14 +156,56 @@ class LocalPlaybackServiceTest {
                 runBlocking { withContext(Dispatchers.Main) { player.playSongs(listOf(song), 0) } }
                 assertTrue("$extension did not start", started.await(20, TimeUnit.SECONDS))
                 assertNull("$extension playback failed", error.get())
+                // isPlaying can arrive before the remote controller's position clock has
+                // settled. Require actual progress on the intended item before testing DSP.
+                val clockReady = CountDownLatch(1)
+                val deadline = android.os.SystemClock.elapsedRealtime() + 5000
+                while (clockReady.count > 0 && android.os.SystemClock.elapsedRealtime() < deadline) {
+                    instrumentation.runOnMainSync {
+                        if (player.currentMediaItem?.mediaId == expectedId && player.isPlaying &&
+                            player.currentPosition >= 1000) clockReady.countDown()
+                    }
+                    if (clockReady.count > 0) Thread.sleep(50)
+                }
+                assertEquals("$extension output clock never advanced on $expectedId", 0L, clockReady.count)
+                for (mode in com.music.bitchord.playback.SpatialMode.entries) {
+                    var before = 0L
+                    instrumentation.runOnMainSync {
+                        assertEquals(expectedId, player.currentMediaItem?.mediaId)
+                        before = player.currentPosition
+                        discontinuities.clear()
+                        checkingTransition = true
+                        com.music.bitchord.data.settings.AppSettings.setSpatialScene(
+                            com.music.bitchord.data.settings.AppSettings.spatialScene.value.copy(mode = mode))
+                        com.music.bitchord.data.settings.AppSettings.setSpatialAudio(true)
+                    }
+                    Thread.sleep(350)
+                    instrumentation.runOnMainSync {
+                        assertNull("$extension/$mode", player.playerError)
+                        assertTrue("$extension/$mode stopped", player.isPlaying)
+                        val after = player.currentPosition
+                        android.util.Log.i("SpaceSpatialContinuity", "$extension/$mode before=$before after=$after reasons=$discontinuities")
+                        assertEquals(expectedId, player.currentMediaItem?.mediaId)
+                        assertTrue("$extension/$mode discontinuity: $discontinuities", discontinuities.isEmpty())
+                        // Remote controller extrapolation may be corrected by a few ms.
+                        // A restart from the >=1 s baseline cannot pass this 50 ms bound.
+                        assertTrue("$extension/$mode position regressed: $before -> $after", after + 50 >= before)
+                        checkingTransition = false
+                    }
+                }
                 instrumentation.runOnMainSync {
+                    com.music.bitchord.data.settings.AppSettings.setSpatialAudio(false)
                     assertTrue("$extension has no decoded duration", player.duration > 0)
                     player.pause()
                     player.removeListener(listener)
                 }
             }
         } finally {
-            instrumentation.runOnMainSync { controller?.stop(); controller?.clearMediaItems(); controller?.release() }
+            instrumentation.runOnMainSync {
+                com.music.bitchord.data.settings.AppSettings.setSpatialScene(savedScene)
+                com.music.bitchord.data.settings.AppSettings.setSpatialAudio(savedSpatial)
+                controller?.stop(); controller?.clearMediaItems(); controller?.release()
+            }
             scenario.close()
             files.forEach { it.delete() }
         }

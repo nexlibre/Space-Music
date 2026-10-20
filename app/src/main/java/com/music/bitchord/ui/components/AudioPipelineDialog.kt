@@ -147,6 +147,7 @@ fun AudioPipelineDialog(
     val eqEnabled by AppSettings.equalizerEnabled.collectAsStateWithLifecycle()
     val eqPreset by AppSettings.equalizerPreset.collectAsStateWithLifecycle()
     val spatialAudio by AppSettings.spatialAudio.collectAsStateWithLifecycle()
+    val spatialScene by AppSettings.spatialScene.collectAsStateWithLifecycle()
     val loudnessNormalization by AppSettings.loudnessNormalization.collectAsStateWithLifecycle()
 
     val context = LocalContext.current
@@ -363,7 +364,11 @@ fun AudioPipelineDialog(
             } else {
                 "Flat"
             }
-            val stereoExpandText = if (spatialAudio) "250%" else "100%"
+            val stereoExpandText = if (!spatialAudio) "100%" else when (spatialScene.mode) {
+                com.music.bitchord.playback.SpatialMode.ORIGINAL -> "250%"
+                com.music.bitchord.playback.SpatialMode.EIGHT_D -> "8D"
+                com.music.bitchord.playback.SpatialMode.ADVANCED -> "Binaural"
+            }
             val buffersText = outputStatus.bufferSize?.let { size ->
                 val rate = outputStatus.actualSampleRateHz
                 val bytesPerSample = when (outputStatus.actualEncoding) {

@@ -196,6 +196,14 @@ fun SettingsScreen(
     // which caches the codec-list walk for the life of the process.
     val dolbyAtmosSupported = DeviceCodecs.playsDolbyAtmos
     val spatialAudio by AppSettings.spatialAudio.collectAsStateWithLifecycle()
+    var showSpatialScene by remember { mutableStateOf(false) }
+    if (showSpatialScene) {
+        ModalBottomSheet(onDismissRequest = { showSpatialScene = false }) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+                SpatialSceneControls()
+            }
+        }
+    }
     val nerdStats by AppSettings.showNerdStats.collectAsStateWithLifecycle()
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
@@ -634,17 +642,8 @@ fun SettingsScreen(
                     } else {
                         stringResource(R.string.spatial_audio_subtitle)
                     },
-                    trailing = {
-                        Switch(
-                            checked = spatialAudio,
-                            onCheckedChange = AppSettings::setSpatialAudio,
-                            colors = SwitchDefaults.colors(
-                                checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                checkedBorderColor = MaterialTheme.colorScheme.primary,
-                            ),
-                        )
-                    },
-                    onClick = { AppSettings.setSpatialAudio(!spatialAudio) },
+                    trailing = { Icon(Icons.Rounded.Tune, contentDescription = "Configurar audio espacial") },
+                    onClick = { showSpatialScene = true },
                 )
             }
             // The system panel is not listed here as well. A device with a

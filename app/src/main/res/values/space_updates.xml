@@ -3,5 +3,5 @@
     <string name="space_playlist_actions">Playlist options</string>
     <string name="space_song_actions">Song options</string>
     <string name="space_whats_new">What is new in Space Music %1$s</string>
-    <string name="space_whats_new_body">More room for your music.\n\n• Compact translucent bottom controls with Liquid Glass blur.\n• Lists scroll behind the controls without an opaque footer.\n• Settings now presents the Space Music identity.\n• Attribution and license remain available offline under Licenses and open source.</string>
+    <string name="space_whats_new_body">Three spatial modes.\n\n• Original preserves the previous spatial sound.\n• Audio 8D adds a smooth orbit with speed, width and room controls.\n• Advanced uses a parametric binaural model with interaural delays and head-shadow filtering.\n• Independent profiles and preferences. Best with headphones; no source separation or head tracking.</string>
 </resources>

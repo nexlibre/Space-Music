@@ -1,0 +1,205 @@
+name: Verify signed Space Music 2.4.0 navigation, update and compatibility
+# Official identity and signed update tests gate a downloadable prerelease; hardware listening checks remain pending.
+on:
+  push:
+    branches: [space-spatial-3-in-1]
+    paths: ['.github/workflows/space-2.4.0-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: space-stable-release-2.4.0
+  cancel-in-progress: true
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERIFIED_RUN: '39343912959'
+      VERIFIED_SHA: adbf18eed17e7810428862ee36327c4ec56ebe4f
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require compiled and regression-checked source; signed device tests gate publication
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN --jq .head_sha)" = "$VERIFIED_SHA"
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN --jq .conclusion)" = success
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN/jobs --jq '.jobs[] | select(.name == "build") | .conclusion')" = success
+          git diff --exit-code "$VERIFIED_SHA" HEAD -- app shared sharedUi gradle scripts build.gradle.kts settings.gradle.kts gradle.properties gradlew gradlew.bat buildSrc
+      - name: Require existing signing credentials before downloading build
+        env:
+          KEY: ${{ secrets.SPACE_KEYSTORE_B64 }}
+          PASSWORD: ${{ secrets.SPACE_KEYSTORE_PASSWORD }}
+          RECOVERY_KEY: ${{ secrets.SPACE_SIGNING_RECOVERY_KEY_B64 }}
+        run: |
+          if [ -n "$KEY" ] && [ -n "$PASSWORD" ]; then exit 0; fi
+          if [ -n "$RECOVERY_KEY" ]; then
+            echo 'The original encrypted signing backup can be restored by the signing step.'
+            exit 0
+          fi
+          echo '::error::Provide the original keystore and password, or SPACE_SIGNING_RECOVERY_KEY_B64 for the matching private recovery key.'
+          exit 1
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: Install signature verification tools
+        run: sdkmanager 'build-tools;36.0.0'
+      - uses: actions/download-artifact@v4
+        with:
+          name: space-android-build
+          path: built
+          github-token: ${{ github.token }}
+          run-id: '39343912959'
+      - name: Sign current tested build with original update identity
+        env:
+          SPACE_KEYSTORE_B64: ${{ secrets.SPACE_KEYSTORE_B64 }}
+          SPACE_KEYSTORE_PASSWORD: ${{ secrets.SPACE_KEYSTORE_PASSWORD }}
+          SPACE_SIGNING_RECOVERY_KEY_B64: ${{ secrets.SPACE_SIGNING_RECOVERY_KEY_B64 }}
+          SPACE_SIGNING_RECOVERY_PASSWORD: ${{ secrets.SPACE_SIGNING_RECOVERY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          keydir=$(mktemp -d)
+          trap 'rm -rf "$keydir"' EXIT
+          if [ -n "$SPACE_KEYSTORE_B64" ] && [ -n "$SPACE_KEYSTORE_PASSWORD" ]; then
+            printf '%s' "$SPACE_KEYSTORE_B64" | base64 -d > "$keydir/original.p12"
+          else
+            printf '%s' "$SPACE_SIGNING_RECOVERY_KEY_B64" | base64 -d > "$keydir/recovery.pem"
+            openssl cms -decrypt -binary -inform DER -in .signing/space-release-key.cms \
+              -inkey "$keydir/recovery.pem" -passin env:SPACE_SIGNING_RECOVERY_PASSWORD \
+              -out "$keydir/signing-backup.tar.gz"
+            tar -xzf "$keydir/signing-backup.tar.gz" -C "$keydir"
+            test -s "$keydir/space-release.p12" && test -s "$keydir/password.txt"
+            mv "$keydir/space-release.p12" "$keydir/original.p12"
+            export SPACE_KEYSTORE_PASSWORD="$(cat "$keydir/password.txt")"
+          fi
+          keytool -exportcert -keystore "$keydir/original.p12" -alias space-music -storepass:env SPACE_KEYSTORE_PASSWORD -file "$keydir/cert.der"
+          expected=5436f4210119058a215c0b0660dead0a9b1bed315f13d6f801645c71c942c5ce
+          test "$(sha256sum "$keydir/cert.der" | cut -d' ' -f1)" = "$expected"
+          mkdir -p dist
+          apk=$(find built -path '*/prod/release/*' -name '*universal*unsigned.apk' | head -1)
+          tests=$(find built -path '*/androidTest/prod/release/*' -name '*.apk' | head -1)
+          test -n "$apk"; test -n "$tests"
+          signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          align="$ANDROID_HOME/build-tools/36.0.0/zipalign"
+          "$align" -f -P 16 4 "$apk" "$keydir/aligned.apk"
+          "$signer" sign --ks "$keydir/original.p12" --ks-key-alias space-music --ks-pass env:SPACE_KEYSTORE_PASSWORD --key-pass env:SPACE_KEYSTORE_PASSWORD --out dist/Space-Music-2.4.0.apk "$keydir/aligned.apk"
+          "$signer" sign --ks "$keydir/original.p12" --ks-key-alias space-music --ks-pass env:SPACE_KEYSTORE_PASSWORD --key-pass env:SPACE_KEYSTORE_PASSWORD --out dist/test-runner.apk "$tests"
+          "$signer" verify --verbose --print-certs dist/Space-Music-2.4.0.apk | tee dist/Space-Music-2.4.0.apk.signature.txt
+          "$signer" verify --print-certs dist/test-runner.apk | tee dist/test-signature.txt
+          grep -q "$expected" dist/Space-Music-2.4.0.apk.signature.txt
+          grep -q "$expected" dist/test-signature.txt
+          "$align" -c -P 16 4 dist/Space-Music-2.4.0.apk
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging dist/Space-Music-2.4.0.apk > dist/package-verification.txt
+          grep -q "package: name='org.nexlibre.spacemusic' versionCode='8' versionName='2.4.0'" dist/package-verification.txt
+          (cd dist && sha256sum Space-Music-2.4.0.apk > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: space-2.4.0-signed
+          path: dist/
+  device:
+    needs: sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 31
+            screen: 360x800
+          - api: 33
+            screen: 360x800
+          - api: 34
+            screen: 412x892
+          - api: 35
+            screen: 412x892
+          - api: 36
+            screen: 412x892
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: space-2.4.0-signed
+          path: dist
+      - name: Download previous published APK for update verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download v2.3.0 --repo "$GITHUB_REPOSITORY" --pattern '*.apk' --dir previous
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify signed update, playback and restored lyric panels
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          emulator-boot-timeout: 300
+          emulator-options: -no-window -gpu swangle -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none -feature -Vulkan -skin ${{ matrix.screen }} -dpi-device 160
+          disable-animations: true
+          script: bash docs/releases/2.4.0/test-signed-update.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: space-2.4.0-device-${{ matrix.api }}-${{ github.run_attempt }}
+          path: |
+            device-tests.txt
+            device-startup-log.txt
+            device-crash-log.txt
+            device-full-log.txt
+            device-*.xml
+            device-media-fixture.txt
+            device-package-fixture.txt
+            device-playlist-session.txt
+            device-*.png
+
+  publish:
+    needs: [sign, device]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: space-2.4.0-signed
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: space-2.4.0-device-*
+          path: verification
+      - name: Publish verified candidate without replacing an existing release
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/$GITHUB_REPOSITORY/actions/runs/39343912959 --jq .conclusion)" = success
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+          cp docs/spatial/verification-2.4.0.md verification/
+          (cd verification && zip -qr ../dist/Space-Music-2.4.0-verification.zip .)
+          if gh release view v2.4.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Refusing to replace an existing release.'; exit 1
+          fi
+          cp docs/releases/2.4.0/publish-notes.md /tmp/release-notes.md
+          printf '\nSigned-update verification: https://github.com/%s/actions/runs/%s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> /tmp/release-notes.md
+          gh release create v2.4.0 dist/Space-Music-2.4.0.apk dist/SHA256SUMS.txt dist/Space-Music-2.4.0.apk.signature.txt dist/Space-Music-2.4.0-verification.zip --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title 'Space Music 2.4.0 · candidata de audio espacial' --notes-file /tmp/release-notes.md --prerelease --latest=false
+          gh release view v2.4.0 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fx Space-Music-2.4.0.apk

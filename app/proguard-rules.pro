@@ -122,3 +122,27 @@
 # Persisted playlist sorting modes are also part of the release instrumentation API.
 # Prevent enum unboxing from removing fields used by the separately compiled runner.
 -keep enum com.music.bitchord.data.PlaylistSort { *; }
+
+# Spatial release instrumentation is compiled as a separate APK. Preserve its
+# public model/settings/DSP boundary instead of allowing R8 to inline it away.
+-keep enum com.music.bitchord.playback.SpatialMode { *; }
+-keep class com.music.bitchord.playback.SpatialSettings { public *; }
+-keep class com.music.bitchord.playback.SpatialParameters { public *; }
+-keep class com.music.bitchord.playback.SpatialAudioProcessor { public *; }
+-keep class com.music.bitchord.playback.SpatialSceneEngine { public *; }
+-keep class com.music.bitchord.playback.audio.AudioBlock { public *; }
+-keep class com.music.bitchord.data.settings.AppSettings {
+    public static *** INSTANCE;
+    public kotlinx.coroutines.flow.MutableStateFlow getSpatialScene();
+    public kotlinx.coroutines.flow.MutableStateFlow getSpatialAudio();
+    public void setSpatialScene(com.music.bitchord.playback.SpatialSettings);
+    public void setSpatialAudio(boolean);
+    public void reload();
+}
+-keep class androidx.media3.common.audio.BaseAudioProcessor { public *; }
+-keep interface androidx.media3.common.audio.AudioProcessor { public *; }
+
+# The spatial continuity runner overrides these public callbacks in a separate APK.
+# Preserve descriptor classes as well as Player.Listener so optimized app and runner agree.
+-keep class androidx.media3.common.Player$Events { public *; }
+-keep class androidx.media3.common.Player$PositionInfo { public *; }
